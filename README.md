@@ -38,8 +38,378 @@ Ruflo is a comprehensive AI agent orchestration framework that transforms Claude
 ```
 User → Ruflo (CLI/MCP) → Router → Swarm → Agents → Memory → LLM Providers
                        ↑                          ↓
-                       └──── Learning Loop ←──────┘
+                       # ruflo — ALFA Orchestration Engine
+
+**Fork: Karen Tonoyan / ALFA Ecosystem © 2026**
+**Base: [ruvnet/ruflo](https://github.com/ruvnet/ruflo) — 29k ★ — MIT License**
+
+---
+
+## Czym jest ten fork
+
+`ruflo` to warstwa orkiestracji agentów w ekosystemie ALFA.
+W oryginalnym projekcie: platforma do budowania swarmów agentów dla Claude.
+W ALFA: **silnik koordynacji między Cerberem, Guardianem, ALFA Brain i modelem lokalnym.**
+
+ruflo zastępuje zewnętrzną chmurę orkiestracji — wszystko działa lokalnie,
+bez wysyłania kontekstu do zewnętrznych serwerów.
+
 ```
+ŻĄDANIE OPERACYJNE
+        ↓
+  [ruflo Orchestrator]
+        ↓
+┌──────────────────────────────────────┐
+│  Agent 1: Cerber Gate (Rust)         │
+│  Agent 2: ALFA Brain (memory)        │
+│  Agent 3: Guardian Tagger            │
+│  Agent 4: Łasuch Scorer (Kotlin)     │
+└──────────────────────────────────────┘
+        ↓
+  SPR Router → Model lokalny (Qwen 120B / Ollama)
+        ↓
+  Guardian output filter → odpowiedź
+```
+
+---
+
+## Rola w ekosystemie ALFA
+
+| Komponent ALFA     | Rola ruflo                                              |
+|--------------------|---------------------------------------------------------|
+| **Cerber Gate**    | Agent bezpieczeństwa — pierwszy w pipeline              |
+| **ALFA Brain**     | Agent pamięci — zarządza kontekstem między sesjami      |
+| **Guardian**       | Agent monitoringu — weryfikuje wyjście przed odpowiedzią|
+| **Łasuch v1.2**    | Agent scoringu — klasyfikuje ryzyko prompt injection    |
+| **SPR Router**     | Dispatcher — przydziela zadania do właściwej partycji   |
+
+---
+
+## Integracja z FILTRY TONOYANA v1.0
+
+ruflo orkiestruje 7 filtrów anty-halucynacyjnych jako **sekwencję agentów**:
+
+```
+Prompt wejściowy
+    ↓
+[Agent: Kontrargument]   — generuje alternatywną ścieżkę
+    ↓
+[Agent: Weryfikacja]     — sprawdza spójność z bazą wiedzy
+    ↓
+[Agent: Kontekst]        — izoluje aktywny kontekst od szumu
+    ↓
+[Agent: Anti-magic]      — blokuje twierdzenia bez podstawy
+    ↓
+[Agent: Dwuperspektywa]  — uruchamia dwie niezależne ścieżki
+    ↓
+[Agent: Backtrack]       — cofa do ostatniego stabilnego stanu
+    ↓
+[Agent: Atrybucja]       — weryfikuje źródło każdego twierdzenia
+    ↓
+Odpowiedź zatwierdzona
+```
+
+Każdy agent może **zablokować pipeline** jeśli confidence < threshold.
+Zablokowanie przez dowolny filtr = odpowiedź nie trafia do użytkownika.
+
+---
+
+## Dlaczego ruflo zamiast własnego orkiestratora
+
+ruflo ma 29k gwiazdek i aktywną społeczność — to przetestowana infrastruktura.
+ALFA nie buduje orkiestracji od zera. ALFA **rozszerza** sprawdzony fundament
+o lokalne wykonanie, Cerber gate i FILTRY TONOYANA.
+
+**Zasada:** open idea, closed engine.
+- ruflo (orkiestracja): open source, fork publiczny
+- Cerber (execution gate): closed source, Rust, HMAC-secured
+- FILTRY TONOYANA: open source (enterprise tier w przygotowaniu)
+
+---
+
+## Bezpieczeństwo — co zostało zmienione względem oryginału
+
+Oryginalny ruflo używa zewnętrznych API (Anthropic cloud, OpenAI).
+W forku ALFA:
+
+| Problem oryginalny         | Rozwiązanie ALFA                          |
+|----------------------------|-------------------------------------------|
+| `curl \| bash` install     | Lokalny build, brak zdalnych skryptów     |
+| Unpinned dependencies      | Zablokowane wersje w `package.json`       |
+| Brak sandboxingu agentów   | Cerber Gate jako izolator per-bridge      |
+| Cloud API calls            | Ollama lokalny endpoint, zero zewnętrznych|
+| PII w logach               | GuardianPolicy blokuje PII przed logiem   |
+
+Audyt bezpieczeństwa przeprowadzony — raport wysłany do security@anthropic.com.
+
+---
+
+## Quick Start (ALFA local deployment)
+
+```bash
+git clone https://github.com/Karen86Tonoyan/ruflo.git
+cd ruflo
+npm install
+
+# Konfiguracja lokalnego endpointu (bez chmury)
+cp .env.example .env
+# Ustaw OLLAMA_ENDPOINT=http://localhost:11434
+# Ustaw CERBER_TOKEN=<twój_token_HMAC>
+
+npm run dev
+```
+
+Wymagania:
+- Node.js 18+
+- Ollama z modelem Qwen (lub innym 120B)
+- Cerber Gate uruchomiony lokalnie (port 7443)
+
+---
+
+## Modele obsługiwane
+
+| Provider  | Tryb        | Status w ALFA        |
+|-----------|-------------|----------------------|
+| Ollama    | Lokalny     | ✅ Podstawowy        |
+| Anthropic | Cloud (opt) | ⚠️ Tylko z Cerberem  |
+| OpenAI    | Cloud (opt) | ⚠️ Tylko z Cerberem  |
+| Groq      | Cloud (opt) | ⚠️ Tylko z Cerberem  |
+| Mistral   | Cloud (opt) | ⚠️ Tylko z Cerberem  |
+| Google    | Wyłączony   | ❌ Brak zależności   |
+
+Tryb domyślny ALFA: **Ollama lokalny, zero chmury.**
+Tryby cloud dostępne tylko przez Cerber Gate z pełnym logowaniem.
+
+---
+
+## Struktura agentów ALFA w ruflo
+
+```
+ruflo/
+├── agents/
+│   ├── cerber-agent.ts       # Brama bezpieczeństwa
+│   ├── brain-agent.ts        # Pamięć kontekstowa
+│   ├── guardian-agent.ts     # Monitor wyjścia
+│   ├── lasuch-agent.ts       # Scorer prompt injection
+│   └── spr-router.ts         # Dispatcher partycji
+├── filters/
+│   ├── kontrargument.ts      # Filtr 1
+│   ├── weryfikacja.ts        # Filtr 2
+│   ├── kontekst.ts           # Filtr 3
+│   ├── anti-magic.ts         # Filtr 4
+│   ├── dwuperspektywa.ts     # Filtr 5
+│   ├── backtrack.ts          # Filtr 6
+│   └── atrybucja.ts          # Filtr 7
+└── core/
+    └── orchestrator.ts       # ruflo core (oryginał)
+```
+
+---
+
+## Powiązane repozytoria ALFA
+
+| Repo | Rola |
+|------|------|
+| [alfa-120b-on-small-device](https://github.com/Karen86Tonoyan/alfa-120b-on-small-device) | Guardian v2, SPR, Studio Labels |
+| [VieCutalfabrain](https://github.com/Karen86Tonoyan/VieCutalfabrain) | Graph engine, minimum cut, FILTRY TONOYANA |
+| [claude-howto](https://github.com/karen86tonoyan/claude-howto) | ALFA Layer files, dokumentacja |
+
+---
+
+## Licencja
+
+Fork na licencji MIT (zgodnie z oryginałem ruvnet/ruflo).
+Rozszerzenia ALFA (filtry, agenty Cerber/Guardian/Łasuch): licencja osobna.
+
+---
+
+*Karen Tonoyan — Twórca ALFA — Legnica, Poland — kontakt@karentonoyan.pl*
+# ruflo — ALFA Orchestration Engine
+
+**Fork: Karen Tonoyan / ALFA Ecosystem © 2026**
+**Base: [ruvnet/ruflo](https://github.com/ruvnet/ruflo) — 29k ★ — MIT License**
+
+---
+
+## Czym jest ten fork
+
+`ruflo` to warstwa orkiestracji agentów w ekosystemie ALFA.
+W oryginalnym projekcie: platforma do budowania swarmów agentów dla Claude.
+W ALFA: **silnik koordynacji między Cerberem, Guardianem, ALFA Brain i modelem lokalnym.**
+
+ruflo zastępuje zewnętrzną chmurę orkiestracji — wszystko działa lokalnie,
+bez wysyłania kontekstu do zewnętrznych serwerów.
+
+```
+ŻĄDANIE OPERACYJNE
+        ↓
+  [ruflo Orchestrator]
+        ↓
+┌──────────────────────────────────────┐
+│  Agent 1: Cerber Gate (Rust)         │
+│  Agent 2: ALFA Brain (memory)        │
+│  Agent 3: Guardian Tagger            │
+│  Agent 4: Łasuch Scorer (Kotlin)     │
+└──────────────────────────────────────┘
+        ↓
+  SPR Router → Model lokalny (Qwen 120B / Ollama)
+        ↓
+  Guardian output filter → odpowiedź
+```
+
+---
+
+## Rola w ekosystemie ALFA
+
+| Komponent ALFA     | Rola ruflo                                              |
+|--------------------|---------------------------------------------------------|
+| **Cerber Gate**    | Agent bezpieczeństwa — pierwszy w pipeline              |
+| **ALFA Brain**     | Agent pamięci — zarządza kontekstem między sesjami      |
+| **Guardian**       | Agent monitoringu — weryfikuje wyjście przed odpowiedzią|
+| **Łasuch v1.2**    | Agent scoringu — klasyfikuje ryzyko prompt injection    |
+| **SPR Router**     | Dispatcher — przydziela zadania do właściwej partycji   |
+
+---
+
+## Integracja z FILTRY TONOYANA v1.0
+
+ruflo orkiestruje 7 filtrów anty-halucynacyjnych jako **sekwencję agentów**:
+
+```
+Prompt wejściowy
+    ↓
+[Agent: Kontrargument]   — generuje alternatywną ścieżkę
+    ↓
+[Agent: Weryfikacja]     — sprawdza spójność z bazą wiedzy
+    ↓
+[Agent: Kontekst]        — izoluje aktywny kontekst od szumu
+    ↓
+[Agent: Anti-magic]      — blokuje twierdzenia bez podstawy
+    ↓
+[Agent: Dwuperspektywa]  — uruchamia dwie niezależne ścieżki
+    ↓
+[Agent: Backtrack]       — cofa do ostatniego stabilnego stanu
+    ↓
+[Agent: Atrybucja]       — weryfikuje źródło każdego twierdzenia
+    ↓
+Odpowiedź zatwierdzona
+```
+
+Każdy agent może **zablokować pipeline** jeśli confidence < threshold.
+Zablokowanie przez dowolny filtr = odpowiedź nie trafia do użytkownika.
+
+---
+
+## Dlaczego ruflo zamiast własnego orkiestratora
+
+ruflo ma 29k gwiazdek i aktywną społeczność — to przetestowana infrastruktura.
+ALFA nie buduje orkiestracji od zera. ALFA **rozszerza** sprawdzony fundament
+o lokalne wykonanie, Cerber gate i FILTRY TONOYANA.
+
+**Zasada:** open idea, closed engine.
+- ruflo (orkiestracja): open source, fork publiczny
+- Cerber (execution gate): closed source, Rust, HMAC-secured
+- FILTRY TONOYANA: open source (enterprise tier w przygotowaniu)
+
+---
+
+## Bezpieczeństwo — co zostało zmienione względem oryginału
+
+Oryginalny ruflo używa zewnętrznych API (Anthropic cloud, OpenAI).
+W forku ALFA:
+
+| Problem oryginalny         | Rozwiązanie ALFA                          |
+|----------------------------|-------------------------------------------|
+| `curl \| bash` install     | Lokalny build, brak zdalnych skryptów     |
+| Unpinned dependencies      | Zablokowane wersje w `package.json`       |
+| Brak sandboxingu agentów   | Cerber Gate jako izolator per-bridge      |
+| Cloud API calls            | Ollama lokalny endpoint, zero zewnętrznych|
+| PII w logach               | GuardianPolicy blokuje PII przed logiem   |
+
+Audyt bezpieczeństwa przeprowadzony — raport wysłany do security@anthropic.com.
+
+---
+
+## Quick Start (ALFA local deployment)
+
+```bash
+git clone https://github.com/Karen86Tonoyan/ruflo.git
+cd ruflo
+npm install
+
+# Konfiguracja lokalnego endpointu (bez chmury)
+cp .env.example .env
+# Ustaw OLLAMA_ENDPOINT=http://localhost:11434
+# Ustaw CERBER_TOKEN=<twój_token_HMAC>
+
+npm run dev
+```
+
+Wymagania:
+- Node.js 18+
+- Ollama z modelem Qwen (lub innym 120B)
+- Cerber Gate uruchomiony lokalnie (port 7443)
+
+---
+
+## Modele obsługiwane
+
+| Provider  | Tryb        | Status w ALFA        |
+|-----------|-------------|----------------------|
+| Ollama    | Lokalny     | ✅ Podstawowy        |
+| Anthropic | Cloud (opt) | ⚠️ Tylko z Cerberem  |
+| OpenAI    | Cloud (opt) | ⚠️ Tylko z Cerberem  |
+| Groq      | Cloud (opt) | ⚠️ Tylko z Cerberem  |
+| Mistral   | Cloud (opt) | ⚠️ Tylko z Cerberem  |
+| Google    | Wyłączony   | ❌ Brak zależności   |
+
+Tryb domyślny ALFA: **Ollama lokalny, zero chmury.**
+Tryby cloud dostępne tylko przez Cerber Gate z pełnym logowaniem.
+
+---
+
+## Struktura agentów ALFA w ruflo
+
+```
+ruflo/
+├── agents/
+│   ├── cerber-agent.ts       # Brama bezpieczeństwa
+│   ├── brain-agent.ts        # Pamięć kontekstowa
+│   ├── guardian-agent.ts     # Monitor wyjścia
+│   ├── lasuch-agent.ts       # Scorer prompt injection
+│   └── spr-router.ts         # Dispatcher partycji
+├── filters/
+│   ├── kontrargument.ts      # Filtr 1
+│   ├── weryfikacja.ts        # Filtr 2
+│   ├── kontekst.ts           # Filtr 3
+│   ├── anti-magic.ts         # Filtr 4
+│   ├── dwuperspektywa.ts     # Filtr 5
+│   ├── backtrack.ts          # Filtr 6
+│   └── atrybucja.ts          # Filtr 7
+└── core/
+    └── orchestrator.ts       # ruflo core (oryginał)
+```
+
+---
+
+## Powiązane repozytoria ALFA
+
+| Repo | Rola |
+|------|------|
+| [alfa-120b-on-small-device](https://github.com/Karen86Tonoyan/alfa-120b-on-small-device) | Guardian v2, SPR, Studio Labels |
+| [VieCutalfabrain](https://github.com/Karen86Tonoyan/VieCutalfabrain) | Graph engine, minimum cut, FILTRY TONOYANA |
+| [claude-howto](https://github.com/karen86tonoyan/claude-howto) | ALFA Layer files, dokumentacja |
+
+---
+
+## Licencja
+
+Fork na licencji MIT (zgodnie z oryginałem ruvnet/ruflo).
+Rozszerzenia ALFA (filtry, agenty Cerber/Guardian/Łasuch): licencja osobna.
+
+---
+
+*Karen Tonoyan — Twórca ALFA — Legnica, Poland — kontakt@karentonoyan.pl*
 
 <details>
 <summary>📐 <strong>Expanded Architecture</strong> — Full system diagram with RuVector intelligence</summary>
