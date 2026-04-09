@@ -79,8 +79,9 @@ async function getRegistry(dbPath?: string): Promise<any | null> {
         };
 
         try {
-          await registry.initialize({
+          await (registry as any).initialize({
             dbPath: dbPath || getDbPath(),
+            embeddingModel: 'Xenova/all-MiniLM-L6-v2',
             dimension: 384,
             controllers: {
               reasoningBank: true,
@@ -93,6 +94,44 @@ async function getRegistry(dbPath?: string): Promise<any | null> {
           });
         } finally {
           console.log = origLog;
+        }
+
+        // Wire intelligence module as the learning backend
+        // AgentDB's ReasoningBank/LearningSystem need a better-sqlite3 db handle
+        // which ControllerRegistry doesn't expose. Instead, use the local intelligence
+        // module (SONA + LocalReasoningBank + file persistence) for learning.
+        try {
+          const intelligence = await import('./intelligence.js');
+          const initResult = await intelligence.initializeIntelligence();
+          const reg = registry as any;
+
+          if (initResult.reasoningBankEnabled) {
+            const rb = intelligence.getReasoningBank();
+            if (rb && !reg.get('reasoningBank')) {
+              if (typeof reg.set === 'function') reg.set('reasoningBank', rb);
+              else reg._controllers = { ...(reg._controllers || {}), reasoningBank: rb };
+            }
+          }
+
+          if (initResult.sonaEnabled) {
+            const sona = intelligence.getSonaCoordinator();
+            if (sona && !reg.get('learningSystem')) {
+              if (typeof reg.set === 'function') reg.set('learningSystem', sona);
+              else reg._controllers = { ...(reg._controllers || {}), learningSystem: sona };
+            }
+          }
+
+          // SkillLibrary from AgentDB (no db required)
+          try {
+            const agentdb = await import('agentdb');
+            if (agentdb.SkillLibrary && !reg.get('skills')) {
+              const sk = new (agentdb.SkillLibrary as any)();
+              if (typeof reg.set === 'function') reg.set('skills', sk);
+              else reg._controllers = { ...(reg._controllers || {}), skills: sk };
+            }
+          } catch { /* AgentDB not available */ }
+        } catch {
+          // Intelligence module not available — learning stays unwired
         }
 
         registryInstance = registry;
@@ -444,7 +483,8 @@ export async function bridgeSearchEntries(options: {
   if (!ctx) return null;
 
   try {
-    const { query: queryStr, namespace = 'default', limit = 10, threshold = 0.3 } = options;
+    const { query: queryStr, namespace, limit = 10, threshold = 0.3 } = options;
+    const effectiveNamespace = namespace || 'all';
     const startTime = Date.now();
 
     // Generate query embedding
@@ -460,7 +500,7 @@ export async function bridgeSearchEntries(options: {
     }
 
     // better-sqlite3: .prepare().all() returns array of objects
-    const nsFilter = namespace !== 'all'
+    const nsFilter = effectiveNamespace !== 'all'
       ? `AND namespace = ?`
       : '';
 
@@ -472,7 +512,7 @@ export async function bridgeSearchEntries(options: {
         WHERE status = 'active' ${nsFilter}
         LIMIT 1000
       `);
-      rows = namespace !== 'all' ? stmt.all(namespace) : stmt.all();
+      rows = effectiveNamespace !== 'all' ? stmt.all(effectiveNamespace) : stmt.all();
     } catch {
       return null;
     }
@@ -1177,11 +1217,14 @@ export async function bridgeSearchPatterns(options: {
   try {
     const reasoningBank = registry.get('reasoningBank');
 
-    if (reasoningBank && typeof reasoningBank.search === 'function') {
-      const results = await reasoningBank.search(options.query, {
-        topK: options.topK || 5,
-        minScore: options.minConfidence || 0.3,
-      });
+    // ReasoningBank may expose .searchPatterns() (agentdb) or .search() (legacy) (#1492 Bug 2)
+    if (reasoningBank && typeof (reasoningBank.searchPatterns ?? reasoningBank.search) === 'function') {
+      let results: any;
+      if (typeof reasoningBank.searchPatterns === 'function') {
+        results = await reasoningBank.searchPatterns({ task: options.query, k: options.topK || 5, threshold: options.minConfidence || 0.3 });
+      } else {
+        results = await reasoningBank.search(options.query, { topK: options.topK || 5, minScore: options.minConfidence || 0.3 });
+      }
       return {
         results: Array.isArray(results) ? results.map((r: any) => ({
           id: r.id || r.patternId || '',
